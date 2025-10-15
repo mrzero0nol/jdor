@@ -3,6 +3,10 @@ from dotenv import load_dotenv
 load_dotenv() 
 
 import sys
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+from rich.align import Align
 from app.menus.util import clear_screen, pause
 from app.client.engsel import *
 from app.client.engsel2 import get_tiering_info
@@ -10,36 +14,57 @@ from app.menus.payment import show_transaction_history
 from app.service.auth import AuthInstance
 from app.menus.bookmark import show_bookmark_menu
 from app.menus.account import show_account_menu
+from app.menus.banner import show_banner
 from app.menus.package import fetch_my_packages, get_packages_by_family
 from app.menus.hot import show_hot_menu, show_hot_menu2
 from app.service.sentry import enter_sentry_mode
 from app.menus.purchase import purchase_by_family
 
-WIDTH = 55
+console = Console()
 
 def show_main_menu(profile):
+    """Displays the main menu with a cyberpunk theme using rich."""
     clear_screen()
-    print("=" * WIDTH)
+
     expired_at_dt = datetime.fromtimestamp(profile["balance_expired_at"]).strftime("%Y-%m-%d")
-    print(f"Nomor: {profile['number']} | Type: {profile['subscription_type']}".center(WIDTH))
-    print(f"Pulsa: Rp {profile['balance']} | Aktif sampai: {expired_at_dt}".center(WIDTH))
-    print(f"{profile['point_info']}".center(WIDTH))
-    print("=" * WIDTH)
-    print("Menu:")
-    print("1. Login/Ganti akun")
-    print("2. Lihat Paket Saya")
-    print("3. Beli Paket 🔥 HOT 🔥")
-    print("4. Beli Paket 🔥 HOT-2 🔥")
-    print("5. Beli Paket Berdasarkan Family Code")
-    print("6. Riwayat Transaksi")
-    print("7. [Test] Purchase all packages in family code")
-    print("00. Bookmark Paket")
-    print("99. Tutup aplikasi")
-    print("-------------------------------------------------------")
+
+    profile_text = Text.assemble(
+        ("Nomor         : ", "bold cyan"), (f"{profile['number']}\n", "white"),
+        ("Tipe          : ", "bold cyan"), (f"{profile['subscription_type']}\n\n", "white"),
+        ("Pulsa         : ", "bold green"), (f"Rp {profile['balance']}\n", "white"),
+        ("Masa Aktif    : ", "bold green"), (f"{expired_at_dt}\n\n", "white"),
+        (f"{profile['point_info']}", "bold yellow")
+    )
+
+    console.print(Panel(
+        profile_text,
+        title="[bold magenta]--[ User Profile ]--[/bold magenta]",
+        border_style="bold green",
+        padding=(1, 2)
+    ))
+
+    menu_text = Text.assemble(
+        (" 1.", "bold yellow"), (" Login/Ganti akun\n", "white"),
+        (" 2.", "bold yellow"), (" Lihat Paket Saya\n", "white"),
+        (" 3.", "bold yellow"), (" Beli Paket ", "white"), ("🔥 HOT 🔥\n", "bold red"),
+        (" 4.", "bold yellow"), (" Beli Paket ", "white"), ("🔥 HOT-2 🔥\n", "bold red"),
+        (" 5.", "bold yellow"), (" Beli Paket Berdasarkan Family Code\n", "white"),
+        (" 6.", "bold yellow"), (" Riwayat Transaksi\n\n", "white"),
+        (" 7.", "bold yellow"), (" [Test] Purchase all packages in family code\n", "grey50"),
+        ("00.", "bold yellow"), (" Bookmark Paket\n\n", "white"),
+        ("99.", "bold red"),   (" Tutup aplikasi", "white")
+    )
+
+    console.print(Panel(
+        menu_text,
+        title="[bold magenta]--[ Main Menu ]--[/bold magenta]",
+        border_style="bold green",
+        padding=(1, 2)
+    ))
 
 show_menu = True
 def main():
-    
+    show_banner()
     while True:
         active_user = AuthInstance.get_active_user()
 
@@ -72,7 +97,7 @@ def main():
 
             show_main_menu(profile)
 
-            choice = input("Pilih menu: ")
+            choice = console.input("[bold yellow]Pilih menu > [/bold yellow]")
             if choice == "1":
                 selected_user_number = show_account_menu()
                 if selected_user_number:
