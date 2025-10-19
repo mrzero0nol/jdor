@@ -5,6 +5,7 @@ import requests
 
 from datetime import datetime, timezone, timedelta
 
+from app.client.wrapper import handle_auth_errors, SessionExpiredException
 from app.client.encrypt import (
     encryptsign_xdata,
     java_like_timestamp,
@@ -15,6 +16,7 @@ from app.client.encrypt import (
     load_ax_fp,
     ax_device_id
 )
+from app.client.token_handler import set_global_ax_vars
 
 BASE_API_URL = os.getenv("BASE_API_URL")
 BASE_CIAM_URL = os.getenv("BASE_CIAM_URL")
@@ -25,6 +27,7 @@ GET_OTP_URL = BASE_CIAM_URL + "/realms/xl-ciam/auth/otp"
 BASIC_AUTH = os.getenv("BASIC_AUTH")
 AX_DEVICE_ID = ax_device_id()
 AX_FP = load_ax_fp()
+set_global_ax_vars(AX_DEVICE_ID, AX_FP)
 SUBMIT_OTP_URL = BASE_CIAM_URL + "/realms/xl-ciam/protocol/openid-connect/token"
 UA = os.getenv("UA")
 
@@ -129,49 +132,7 @@ def submit_otp(api_key: str, contact: str, code: str):
         print(f"[Error submit_otp]: {e}")
         return None
 
-def get_new_token(refresh_token: str) -> str:
-    url = SUBMIT_OTP_URL
-
-    now = datetime.now(timezone(timedelta(hours=7)))  # GMT+7
-    ax_request_at = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+0700"
-    ax_request_id = str(uuid.uuid4())
-
-    headers = {
-        "Host": BASE_CIAM_URL.replace("https://", ""),
-        "ax-request-at": ax_request_at,
-        "ax-device-id": AX_DEVICE_ID,
-        "ax-request-id": ax_request_id,
-        "ax-request-device": "samsung",
-        "ax-request-device-model": "SM-N935F",
-        "ax-fingerprint": AX_FP,
-        "authorization": f"Basic {BASIC_AUTH}",
-        "user-agent": UA,
-        "ax-substype": "PREPAID",
-        "content-type": "application/x-www-form-urlencoded"
-    }
-
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token
-    }
-
-    resp = requests.post(url, headers=headers, data=data, timeout=30)
-    if resp.status_code == 400:
-        if resp.json().get("error_description") == "Session not active":
-            print("Refresh token expired. Pleas remove and re-add the account.")
-            return None
-        
-    resp.raise_for_status()
-
-    body = resp.json()
-    
-    if "id_token" not in body:
-        raise ValueError("ID token not found in response")
-    if "error" in body:
-        raise ValueError(f"Error in response: {body['error']} - {body.get('error_description', '')}")
-    
-    return body
-
+@handle_auth_errors
 def send_api_request(
     api_key: str,
     path: str,
@@ -179,51 +140,47 @@ def send_api_request(
     id_token: str,
     method: str = "POST",
 ):
-    encrypted_payload = encryptsign_xdata(
-        api_key=api_key,
-        method=method,
-        path=path,
-        id_token=id_token,
-        payload=payload_dict
-    )
-    
-    xtime = int(encrypted_payload["encrypted_body"]["xtime"])
-    
-    now = datetime.now(timezone.utc).astimezone()
-    sig_time_sec = (xtime // 1000)
-
-    body = encrypted_payload["encrypted_body"]
-    x_sig = encrypted_payload["x_signature"]
-    
-    headers = {
-        "host": BASE_API_URL.replace("https://", ""),
-        "content-type": "application/json; charset=utf-8",
-        "user-agent": UA,
-        "x-api-key": API_KEY,
-        "authorization": f"Bearer {id_token}",
-        "x-hv": "v3",
-        "x-signature-time": str(sig_time_sec),
-        "x-signature": x_sig,
-        "x-request-id": str(uuid.uuid4()),
-        "x-request-at": java_like_timestamp(now),
-        "x-version-app": "8.8.0",
-    }
-    
-    
-
-    url = f"{BASE_API_URL}/{path}"
-    resp = requests.post(url, headers=headers, data=json.dumps(body), timeout=30)
-    
-    # print(f"Headers: {json.dumps(headers, indent=2)}")
-    # print(f"Response body: {resp.text}")
-
     try:
-        decrypted_body = decrypt_xdata(api_key, json.loads(resp.text))
-        # print(f"Decrypted body: {json.dumps(decrypted_body, indent=2)}")
+        encrypted_payload = encryptsign_xdata(
+            api_key=api_key,
+            method=method,
+            path=path,
+            id_token=id_token,
+            payload=payload_dict
+        )
+
+        xtime = int(encrypted_payload["encrypted_body"]["xtime"])
+
+        now = datetime.now(timezone.utc).astimezone()
+        sig_time_sec = (xtime // 1000)
+
+        body = encrypted_payload["encrypted_body"]
+        x_sig = encrypted_payload["x_signature"]
+
+        headers = {
+            "host": BASE_API_URL.replace("https://", ""),
+            "content-type": "application/json; charset=utf-8",
+            "user-agent": UA,
+            "x-api-key": API_KEY,
+            "authorization": f"Bearer {id_token}",
+            "x-hv": "v3",
+            "x-signature-time": str(sig_time_sec),
+            "x-signature": x_sig,
+            "x-request-id": str(uuid.uuid4()),
+            "x-request-at": java_like_timestamp(now),
+            "x-version-app": "8.8.0",
+        }
+
+        url = f"{BASE_API_URL}/{path}"
+        resp = requests.post(url, headers=headers, data=json.dumps(body), timeout=30)
+
+        response_json = json.loads(resp.text)
+        decrypted_body = decrypt_xdata(api_key, response_json)
         return decrypted_body
-    except Exception as e:
-        print("[decrypt err]", e)
-        return resp.text
+    except (requests.RequestException, json.JSONDecodeError, Exception) as e:
+        print(f"[send_api_request err] {type(e).__name__}: {e}")
+        # Return an error structure that the decorator can understand
+        return {"status": "FAILED", "message": str(e)}
 
 def get_profile(api_key: str, access_token: str, id_token: str) -> dict:
     path = "api/v8/profile"
